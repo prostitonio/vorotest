@@ -13,6 +13,7 @@
 #include <mutex>
 #include <chrono>
 #include <unistd.h>
+#include <algorithm>
 
 using namespace std;
 using namespace voro;
@@ -33,7 +34,7 @@ char* voro_file = "voro.vor";
 mutex mtx;
 md_file *mf; md_header mdh; md_ts mdts;
 long int ts_first = 1; long int ts_step = 1; long int ts_last = LONG_MAX;
-const int nbin =30;
+const int nbin =10;
 int g_num_atom = 0;
 int core = 1;
 int ts_cnt=1; 
@@ -62,11 +63,11 @@ class atom{
 
 atom::atom(string line){
 
-	num_mol = stoi(line.substr(0,5));
+	num_mol = stoi(line.substr(0,5))-1;
 	name_mol = del_prob(line.substr(5,5));
 	type_atom_in_mol = del_prob(line.substr(10,5));
-	g_num_atom++;
 	num_atom=g_num_atom;
+	g_num_atom++;
 	x = stof(line.substr(20,8));
 	y = stof(line.substr(28,8));
 	z = stof(line.substr(36,8));
@@ -76,16 +77,7 @@ atom::atom(string line){
 		vy = stof(line.substr(52,8));
 		vz = stof(line.substr(60,8));
 	};	
-
-};
-
-class molecul{
-	public:
-	int atom_to_mol=0;
-};
-
-
-
+}
 
 class Point3{
 	public:
@@ -103,14 +95,14 @@ class Frame{
 	 
 };
 
-float get_r(char type){
+float get_r( char type ){
 	string type_atom;
 	type_atom.push_back(type);
 	const float rC = 0.175, rH = 0.125 , rO = 0.145 ;
 	if(type_atom == "C" ){return rC;}
 	if(type_atom == "O" ){return rO;}
 	if(type_atom == "H" ){return rH;}
-	return 0;
+	return 0.0;
 };
 
 
@@ -141,6 +133,7 @@ grofile::grofile(string name_file){
 			r_list.push_back(get_r(atom_name));
 			all_atom.push_back(a);
 		}
+		count_mol = all_atom[count_atom-1].num_mol + 1;
 		f.close();
 	}
 };
@@ -164,29 +157,69 @@ class Molecul{
 	vector<int> nei_atom;
 	vector<int> nei_mol;
 
-}
+};
 
 
+class tess_voro_mol{
+	public: 
+		vector<vector<int>> all_nei_mol;
+		vector<float> all_vol_mol;
 
+};
 Frame get_frame(grofile &gro);
 void calc_voro_tess(const Frame &fr,int i, tess_voro &vor);
 
-void build_molecul(tess_voro &vor, grofile gro){
+// /*
+tess_voro_mol build_molecul(tess_voro &vor, grofile gro){
 	vector<Molecul> all_mol;
+	vector<vector<int>> all_nei_mol;
+	vector<float> all_vol_mol;
+	tess_voro_mol ret;
+	
+//	cout << "push 1" << endl;
+	for(int i = 0; i < gro.count_mol ; i++)
+		all_mol.push_back(Molecul()); // Создаем пустой список молекул
+	
+	cout << gro.count_mol << "  " << vor.all_vol.size() <<   endl;
+//	cout << "push 2" << endl;
 	for(int i = 0; i < vor.all_vol.size() ; i++){
-		all_mol[gro.all_atom[i].num_mol].all_atom.push_back(i);
+//		cout << i <<" "<< gro.all_atom[i].num_mol << " " << endl;
+		all_mol[ gro.all_atom[i].num_mol ].all_atom.push_back(i); // Засовываем атомы в молекулы используя gro конфигурацию
+	// Для каждого атома находим в какой молекуле он находится и в эту молекулу засовываем этот атом 
 	}
-
-	for(int i = 0;i < all_mol.size();i++){
-                for(int j = 0; j < all_mol[i].all_atom.size(); j++){
-			all_mol[i].all_vol_atom[j] = tess_voro.all_vol[all_mol[i].all_atom[j]]
+	/*
+	for(int i = 0; i < all_mol.size()+1 ; i++){
+		cout << "mol "<< i << ": ";
+		for(int j = 0; j < all_mol[i].all_atom.size() ; j++){
+			cout << all_mol[i].all_atom[j] << " ";
 		}
+		cout << endl;
+	} // Проверяем какой молекуле какой атом соответвует */ 
+
+	//cout << "push 3  all_mol.size()" << all_mol.size() <<endl;
+	for(int i = 0; i < all_mol.size(); i++){
+//		cout << "i = " <<i << endl;
+
+		//cout << "	push 4" << endl;
+                for(int j = 0; j < all_mol[i].all_atom.size(); j++)
+			all_mol[i].all_vol_atom.push_back(0.0); //Заполняем массив объемов атомов в молекуле нулями для даньнейшего корекного заполнения 
+
+                for(int j = 0; j < all_mol[i].all_atom.size(); j++)
+			all_mol[i].all_vol_atom[j] = vor.all_vol[all_mol[i].all_atom[j]];
+		 // Присваемваем всем атомам их объемы
 		float vol;
+//		cout << "	push 5" << endl;
                 for(int j = 0; j < all_mol[i].all_atom.size(); j++){
 			vol+=all_mol[i].all_vol_atom[j];
-		}
+			//cout << all_mol[i].all_vol_atom[j] << " " ;
 
+		}
+		//cout<< "volume mol: "<< vol << endl;
+		
 		all_mol[i].vol_mol = vol;
+		all_vol_mol.push_back(vol);
+		vol=0;	
+//		cout << "	push 6" << endl;
 
 		for(int j = 0; j < all_mol[i].all_atom.size(); j++){
 			for(int k = 0; k < vor.all_nei[all_mol[i].all_atom[j]].size(); k++){
@@ -194,13 +227,50 @@ void build_molecul(tess_voro &vor, grofile gro){
 			}
 		}
 
-		for(int j = 0; j < ; j++){
+ /*
+		for(int j = 0; j < all_mol[i].nei_atom.size(); j++){
+			cout <<   all_mol[i].nei_atom[j] << " ";  
+		}
+		cout << endl; // */
+
+//		cout << "	push 7" << endl;
+		for(int j = 0; j < all_mol[i].nei_atom.size() ; j++){
+			all_mol[i].nei_mol.push_back(gro.all_atom[all_mol[i].nei_atom[j]].num_mol);
+		}
+/*
+		for(int j = 0; j < all_mol[i].nei_mol.size(); j++){
+			cout <<   all_mol[i].nei_mol[j] << " ";  
+		} 
+		cout << endl; // */
+
+//		cout << "	push 8" << endl;
+		sort(all_mol[i].nei_mol.begin(), all_mol[i].nei_mol.end());
+	        auto end = unique(all_mol[i].nei_mol.begin(), all_mol[i].nei_mol.end());
+        	vector<int> b;
+       		copy(all_mol[i].nei_mol.begin(),end,back_inserter ( b ) );   
+       		all_nei_mol.push_back(b);
+		
 		
         }
+	ret.all_nei_mol = all_nei_mol;
+	ret.all_vol_mol = all_vol_mol;
+
+	return ret;
+
+}
+
+fstream check_and_open_voro_file(string name){
+	fstream f(name,ios_base::out|ios_base::trunc|ios_base::binary);
+	if (f.is_open()){
+     		cout << "voro.vor create\n"<< endl;
+     		return f; 
+    	}
 
 }
 
 
+
+// */
 int main( int argc, char** argv ) {
 
 	//КОМАНДНАЯ СТРОКА 
@@ -218,8 +288,13 @@ int main( int argc, char** argv ) {
     	/* Read timesteps from file */
 	
 	grofile gro(conf_file);
+	auto f = check_and_open_voro_file(voro_file);
+	int count_molecul = gro.count_mol;	
+	f << count_molecul;
 	bool end = true;
+
 	while(end){
+		end = false;
 		vector<Frame> all_fr;
 		for( int i = 0; i < core; i++){
 			Frame a;
@@ -246,30 +321,36 @@ int main( int argc, char** argv ) {
 			
   		for (auto & th : ths)
     			th.join();
-
-
+		
+		
 	    	auto t2 = chrono::high_resolution_clock::now();		
 		auto ms_int = chrono::duration_cast<chrono::milliseconds>(t2 - t1);
     		chrono::duration<double, std::milli> ms_double = t2 - t1;
 		
 		cout << "time: "  << ms_int.count() << " ms\n";
-
 		
+	int p;
+	int temp;	
+		for (int  i = 0; i < all_tess.size(); i++){
+			auto n = build_molecul(all_tess[i], gro);
+			for (int j = 0; j < n.all_vol_mol.size() ;j++ ){
+				f << n.all_vol_mol[j];
+				cout << "vol:"<< n.all_vol_mol[j] << endl;
+				p = (int) n.all_nei_mol[j].size();
+				f << p;
+				cout << "num mol"<<n.all_nei_mol[j].size() << endl;
+				
+				for (int k = 0; k < n.all_nei_mol[j].size() ;k++ ){
+					temp = n.all_nei_mol[j][k];
+					f << temp;
+					cout << n.all_nei_mol[j][k] << " ";
+				}
+				cout << endl;
+			}
+		}
 
-
-/*		
-		cout <<"num atom: "<< all_tess[0].all_vol.size() << endl;
-		for(int i = 0 ; i < 10; i++){
-			int size = all_tess[0].all_nei[i].size();
-			cout <<"atom: "<< i <<" size:" << size <<" volume: " << all_tess[0].all_vol[i] <<"   nei: ";
-			for(int j  = 0; j < size;j++){ 
-				cout << all_tess[0].all_nei[i][j] << " ";}
-			cout << endl;		
-
-		}*/
 		cout << "" <<endl;
 
-    /* Getting number of milliseconds as a double. */
 	}
 
 }
