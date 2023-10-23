@@ -14,11 +14,12 @@
 #include <chrono>
 #include <unistd.h>
 #include <algorithm>
+#include <stdlib.h>
 
 using namespace std;
 using namespace voro;
 
-#define DEBUG
+//#define DEBUG
 
 #define INPUT_TRJ_FILE 		1
 #define INPUT_CONF_FILE 	2
@@ -27,6 +28,7 @@ using namespace voro;
 #define SET_BEGIN     		5
 #define SET_END       		6
 #define SET_STEP      		7
+#define TEST_SPEED 		8
 
 char* trj_file = "traj_comp.xtc";
 char* conf_file = "conf.gro";
@@ -34,10 +36,11 @@ char* voro_file = "voro.vor";
 mutex mtx;
 md_file *mf; md_header mdh; md_ts mdts;
 long int ts_first = 1; long int ts_step = 1; long int ts_last = LONG_MAX;
-const int nbin =10;
+int nbin =10;
 int g_num_atom = 0;
 int core = 1;
 int ts_cnt=1; 
+bool test = false;
 int comand_line( int argc, char** argv );
 bool good_param( int i , int argc, char** argv);
 int choise_flag( string choise );
@@ -98,10 +101,12 @@ class Frame{
 float get_r( char type ){
 	string type_atom;
 	type_atom.push_back(type);
-	const float rC = 0.175, rH = 0.125 , rO = 0.145 ;
+	const float rC = 0.175, rH = 0.125 , rO = 0.145, rS = 0.200,  rN = 0.150  ;
 	if(type_atom == "C" ){return rC;}
+	if(type_atom == "S" ){return rS;}
 	if(type_atom == "O" ){return rO;}
 	if(type_atom == "H" ){return rH;}
+	if(type_atom == "N" ){return rN;}
 	return 0.0;
 };
 
@@ -180,7 +185,7 @@ tess_voro_mol build_molecul(tess_voro &vor, grofile gro){
 	for(int i = 0; i < gro.count_mol ; i++)
 		all_mol.push_back(Molecul()); // Создаем пустой список молекул
 	
-	cout << gro.count_mol << "  " << vor.all_vol.size() <<   endl;
+//	cout << gro.count_mol << "  " << vor.all_vol.size() <<   endl;
 //	cout << "push 2" << endl;
 	for(int i = 0; i < vor.all_vol.size() ; i++){
 //		cout << i <<" "<< gro.all_atom[i].num_mol << " " << endl;
@@ -247,7 +252,12 @@ tess_voro_mol build_molecul(tess_voro &vor, grofile gro){
 		sort(all_mol[i].nei_mol.begin(), all_mol[i].nei_mol.end());
 	        auto end = unique(all_mol[i].nei_mol.begin(), all_mol[i].nei_mol.end());
         	vector<int> b;
-       		copy(all_mol[i].nei_mol.begin(),end,back_inserter ( b ) );   
+       		copy(all_mol[i].nei_mol.begin(),end,back_inserter ( b ) );  
+	       	vector<int>::iterator itr = find(b.begin(), b.end(), i);
+		if (itr != b.cend()) {
+			int as = distance(b.begin(), itr);
+        		b.erase(itr);
+    		}	
        		all_nei_mol.push_back(b);
 		
 		
@@ -259,15 +269,34 @@ tess_voro_mol build_molecul(tess_voro &vor, grofile gro){
 
 }
 
-fstream check_and_open_voro_file(string name){
-	fstream f(name,ios_base::out|ios_base::trunc|ios_base::binary);
-	if (f.is_open()){
-     		cout << "voro.vor create\n"<< endl;
-     		return f; 
+FILE* check_and_open_voro_file(const char* name){
+	FILE *iofile = NULL;
+	iofile = fopen(name, "w+b");
+	if (iofile == NULL) {
+        	printf("Error opening file");
+        	//getch();
+       		exit(1);
     	}
+	return iofile;
 
 }
+double get_time(int bin, grofile gro){
+	nbin = bin;
+	Frame a;
+	a = get_frame(gro);
+	vector<float> all_time;		
+	auto t1 = chrono::high_resolution_clock::now();
+	auto qw = tess_voro();
+	calc_voro_tess(a,1,qw);
+	
+	auto t2 = chrono::high_resolution_clock::now();		
+	auto ms_int = chrono::duration_cast<chrono::milliseconds>(t2 - t1);
+	chrono::duration<double, std::milli> ms_double = t2 - t1;
+		
+	double s = ms_int.count();
+	return s;
 
+}
 
 
 // */
@@ -286,71 +315,90 @@ int main( int argc, char** argv ) {
     	if( mf->fmt == MDFMT_G96 ) mdh.natoms = g96_countatoms(mf);
     	mdts.natoms = mdh.natoms;
     	/* Read timesteps from file */
-	
 	grofile gro(conf_file);
-	auto f = check_and_open_voro_file(voro_file);
+	auto iofile = check_and_open_voro_file((char*)voro_file);
 	int count_molecul = gro.count_mol;	
-	f << count_molecul;
+	fwrite(&count_molecul, sizeof(int), 1, iofile);
 	bool end = true;
-
+	int bin = 15;
+		
+	auto tim1 = get_time(bin,gro);
+	auto tim2 = get_time(bin+1,gro);
+	int i = 2;
+	cout << "test speed "<< endl;	
+	if (tim2-tim1 < 0){
+		while(tim2-tim1 < 0){
+			tim1=tim2;
+			tim2 = get_time(bin+i,gro);
+			i++;
+//			cout <<"nbin :"<< nbin <<endl;
+		}
+	}else{}
+	nbin--;
+	cout <<"nbin :"<< nbin <<endl;
+	cout << "main calc "<< endl;
+	int tmstp = 0;
 	while(end){
-		end = false;
+		//end = false;
+		auto t1 = chrono::high_resolution_clock::now();
 		vector<Frame> all_fr;
 		for( int i = 0; i < core; i++){
 			Frame a;
-		        a = get_frame(gro);
+			a = get_frame(gro);
 			if ( a.readOK == false ){ 
 				end=false;break;
 			} else {
-			        all_fr.push_back(a);
+				all_fr.push_back(a);
 			}
 		}
 		
-		auto t1 = chrono::high_resolution_clock::now();
 
 		vector<tess_voro> all_tess;	
 		vector<thread> ths;
 	
 		for (int  i = 0; i < all_fr.size(); i++){
-		       	all_tess.push_back(tess_voro());
+			all_tess.push_back(tess_voro());
 		}
 
 		for (int  i = 0; i < all_fr.size(); i++){
-    			ths.push_back(thread( &calc_voro_tess, cref(all_fr[i]) , i , ref(all_tess[i])  ) );
+			ths.push_back(thread( &calc_voro_tess, cref(all_fr[i]) , i , ref(all_tess[i])  ) );
 		}
 			
-  		for (auto & th : ths)
-    			th.join();
+		for (auto & th : ths)
+			th.join();
 		
 		
-	    	auto t2 = chrono::high_resolution_clock::now();		
-		auto ms_int = chrono::duration_cast<chrono::milliseconds>(t2 - t1);
-    		chrono::duration<double, std::milli> ms_double = t2 - t1;
 		
-		cout << "time: "  << ms_int.count() << " ms\n";
-		
-	int p;
-	int temp;	
+		int p;
+		int temp;	
+		float vol;
 		for (int  i = 0; i < all_tess.size(); i++){
 			auto n = build_molecul(all_tess[i], gro);
 			for (int j = 0; j < n.all_vol_mol.size() ;j++ ){
-				f << n.all_vol_mol[j];
-				cout << "vol:"<< n.all_vol_mol[j] << endl;
+				vol = n.all_vol_mol[j];
+				fwrite(&vol, sizeof(float), 1, iofile);
+				//cout << j <<" vol:"<< n.all_vol_mol[j] << endl;
 				p = (int) n.all_nei_mol[j].size();
-				f << p;
-				cout << "num mol"<<n.all_nei_mol[j].size() << endl;
+				fwrite(&p, sizeof(int), 1, iofile);
+				//cout << "num mol"<<n.all_nei_mol[j].size() << endl;
 				
 				for (int k = 0; k < n.all_nei_mol[j].size() ;k++ ){
 					temp = n.all_nei_mol[j][k];
-					f << temp;
-					cout << n.all_nei_mol[j][k] << " ";
+					fwrite(&temp, sizeof(int), 1, iofile);
+				//	cout << n.all_nei_mol[j][k] << " ";
 				}
-				cout << endl;
+		//		cout << endl;
 			}
 		}
 
-		cout << "" <<endl;
-
+		//cout << "" <<endl;
+		
+		auto t2 = chrono::high_resolution_clock::now();		
+		auto ms_int = chrono::duration_cast<chrono::milliseconds>(t2 - t1);
+		chrono::duration<double, std::milli> ms_double = t2 - t1;
+		
+		cout << tmstp*core << "time: "  << ms_int.count() << " ms\n";
+		tmstp++;
 	}
 
 }
@@ -393,31 +441,31 @@ int comand_line( int argc, char** argv ){
 	for(int i = 1; i < argc; i++){
 		switch( choise_flag(argv[i]) ){
 			case INPUT_TRJ_FILE: 
-				if ( !good_param(i , argc , argv) ){cout << "error\n"; return 0;};
+				if ( !good_param(i , argc , argv) ){cout << "error INPUT_TRJ_FILE \n"; return 0;};
 				i++;trj_file = argv[i];break;
 
 			case INPUT_CONF_FILE: 
-				if ( !good_param(i , argc , argv) ){cout << "error\n"; return 0;}; 
+				if ( !good_param(i , argc , argv) ){cout << "error INPUT_CONF_FILE \n"; return 0;}; 
 				i++;conf_file = argv[i];break;
 
 			case OUTPUT_VORO_FILE: 
-				if ( !good_param(i , argc , argv) ){cout << "error\n"; return 0;} 
+				if ( !good_param(i , argc , argv) ){cout << "error OUTPUT_VORO_FILE \n"; return 0;} 
 				i++;voro_file = argv[i];break;
 
 			case COUNT_TREAD: 
-				if ( !good_param(i , argc , argv) ){cout << "error\n"; return 0;} 		
+				if ( !good_param(i , argc , argv) ){cout << "error COUNT_TREAD \n"; return 0;} 		
 				i++;core = stoi(argv[i]);break;
 
 			case SET_BEGIN:
-				if ( !good_param(i , argc , argv) ){cout << "error\n"; return 0;} 		
+				if ( !good_param(i , argc , argv) ){cout << "error SET_BEGIN \n"; return 0;} 		
 				i++;ts_first = stoi(argv[i]);break;
 
 			case SET_END  :
-				if ( !good_param(i , argc , argv) ){cout << "error\n"; return 0;} 		
+				if ( !good_param(i , argc , argv) ){cout << "error SET_END \n"; return 0;} 		
 				i++;ts_last = stoi(argv[i]);break;
 
 			case SET_STEP :
-				if ( !good_param(i , argc , argv) ){cout << "error\n"; return 0;} 		
+				if ( !good_param(i , argc , argv) ){cout << "error SET_STEP  \n"; return 0;} 		
 				i++;ts_step = stoi(argv[i]);break;
 
 			case 0: cout << "not" << endl; break;
@@ -509,7 +557,7 @@ void calc_voro_tess(const Frame &fr,int i,tess_voro &vor){
 	//tess_voro vor;
 
 
-	auto t1 = chrono::high_resolution_clock::now();
+//	auto t1 = chrono::high_resolution_clock::now();
 	if(vl.start()){
 		do{ 
 			if(con.compute_cell(c,vl)) {
@@ -528,49 +576,9 @@ void calc_voro_tess(const Frame &fr,int i,tess_voro &vor){
 
 
 	
-    	auto t2 = chrono::high_resolution_clock::now();		
-	auto ms_int = chrono::duration_cast<chrono::milliseconds>(t2 - t1);
-    	chrono::duration<double, std::milli> ms_double = t2 - t1;
+  //  	auto t2 = chrono::high_resolution_clock::now();		
+//	auto ms_int = chrono::duration_cast<chrono::milliseconds>(t2 - t1);
+  //  	chrono::duration<double, std::milli> ms_double = t2 - t1;
 
-	cout << i << " - " << this_thread::get_id() << "time: "  << ms_int.count() << "ms\n";
+//	cout << i << " - " << this_thread::get_id() << "time: "  << ms_int.count() << "ms\n";
 }
-  /*
-
-
-    	while( !end_of_file_xdr() )
-    	{	
-       		++ts_cnt;
-		//if (read_norm()){return 0;};
-		if( ts_cnt >= ts_first && ((ts_cnt - ts_first) % ts_step == 0) ){
-			container con(0,mdts.box->A ,0,mdts.box->B,0,mdts.box->C,nbin,nbin,nbin,true,true,true,1024);
-			particle_order po;
-			for(int i=0; i < mdts.natoms; ++i){
-				float *a = mdts.pos + 3*i;
-				con.put(po,i,a[0],a[1],a[2]);
-			}
-
-			voronoicell_neighbor c(con);
-			c_loop_order vl(con, po);
-			int ind_mol = 0; 
-			if(vl.start()){
-			    	do{ 
-					if(con.compute_cell(c,vl)) {
-				   	fprintf(stdout, "num atom %d; volume %e; neibors:", ind_mol , c.volume());
-				   	std::vector<int> v;
-				   	c.neighbors(v);
-				   	for (auto it = v.begin(); it != v.end(); it++) {
-				      		fprintf(stdout, "%d ", *it);
-				   	}
-	
-					fprintf(stdout, ";\n");
-					}
-					ind_mol++;
-			    	} while(vl.inc());
-			}
-		}
-		mdio_tsfree( &mdts );
-		if( ts_cnt >= ts_last )break;
-    	}
-
-    	//fprintf(stderr, "ended read_timestep on step %d\n", ts_cnt);
-//  */
